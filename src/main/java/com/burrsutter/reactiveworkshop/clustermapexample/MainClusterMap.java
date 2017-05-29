@@ -1,82 +1,99 @@
 package com.burrsutter.reactiveworkshop.clustermapexample;
 
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedSet;
+import com.hazelcast.config.Config;
+import com.hazelcast.config.XmlConfigBuilder;
 import io.vertx.core.AbstractVerticle;
-import io.vertx.core.shareddata.SharedData;
+import io.vertx.core.Vertx;
+import io.vertx.core.VertxOptions;
+import io.vertx.core.json.Json;
 import io.vertx.core.shareddata.AsyncMap;
 import io.vertx.ext.web.Router;
+import io.vertx.ext.web.RoutingContext;
+import io.vertx.spi.cluster.hazelcast.HazelcastClusterManager;
+
+import java.util.Set;
 
 import static java.time.LocalDateTime.now;
 
-/**
- * Created by burr on 5/26/17.
- */
 public class MainClusterMap extends AbstractVerticle {
-    private final String hostname = System.getenv().getOrDefault("HOSTNAME", "unknown");
 
-    public void start() {
-        System.out.println("Start Clustered? " + vertx.isClustered());
-        SharedData sd = vertx.sharedData();
+    private static final String CLUSTER_MAP_KEY = "cluster_map_";
 
-        //AsyncMap<Object, Object> myClusteredMap;
+    private static final String NAMES_KEY = "names_";
 
-        Router router = Router.router(vertx);
-
-        router.get("/").handler(ctx -> {
-            // System.out.println();
-            ctx.response().end("Clustered? " + vertx.isClustered() + " index " + now());
-
-        });
-
-        // /api/addstuff?name=burr
-        router.get("/api/addstuff").handler(ctx -> {
-            String name = ctx.request().getParam("name");
-            String value = "added on " + hostname + "(" + vertx.hashCode() + ")" + " at " + now();
-
-            vertx.sharedData().getClusterWideMap("MyClusterMap1", arGetMap -> {
-                AsyncMap<Object, Object> myClusteredMap = arGetMap.result();
-                myClusteredMap.put(name, value, arPut -> {
-                    if(arPut.succeeded()) {
-                        System.out.println("Added " + name + " " + value);
-                        ctx.response().end("Added " + name + " " + value);
-                    } else {
-                        ctx.response().end("Failed " + arPut.cause());
-                    }
+    public static void main(String[] args) {
+        Config config = new XmlConfigBuilder(MainClusterMap.class.getResourceAsStream("/cluster.xml")).build();
+        VertxOptions vertxOptions = new VertxOptions()
+                .setHAEnabled(true)
+                .setClustered(true)
+                .setClusterManager(new HazelcastClusterManager(config));
+        Vertx.clusteredVertx(vertxOptions, clusterHandler -> {
+            if (clusterHandler.succeeded()) {
+                clusterHandler.result().deployVerticle(new MainClusterMap(), handler -> {
+                    System.out.println(handler
+                            .map("Deployment succeeded")
+                            .otherwise(t -> String.format("Deployment failed with %s", t.getMessage()))
+                            .result());
                 });
+            } else {
+                System.out.println(String.format("Failed to start cluster with cause %s", clusterHandler.cause()));
+            }
+        });
+    }
+
+    @Override
+    public void start() {
+        vertx.sharedData().getClusterWideMap(CLUSTER_MAP_KEY, mapEvent -> {
+            AsyncMap<Object, Object> result = mapEvent.result();
+            result.put(NAMES_KEY, ImmutableSet.of(), event -> {
             });
         });
 
-        // /api/getstuff?name=burr
-        router.get("/api/getstuff").handler(ctx -> {
-            String name = ctx.request().getParam("name");
-            System.out.println("Name: " + name);
-            StringBuffer sb = new StringBuffer();
-
-            vertx.sharedData().getClusterWideMap("MyClusterMap1", arGetMap -> {
-                AsyncMap<Object, Object> myClusteredMap = arGetMap.result();
-                System.out.println("Map acquired");
-                myClusteredMap.size(arSize -> {
-                    Integer size = arSize.result();
-                    System.out.println("Size acquired " + size);
-                    sb.append("Overall Size: " + arSize.result() + "\n");
-                    if (size > 0) {
-                        if (name != null && !name.isEmpty()) {
-                            myClusteredMap.get(name, arGet -> {
-                                if (arGet.succeeded()) {
-                                    String value = (String) arGet.result();
-                                    System.out.println("name's value acquired " + value);
-                                    sb.append(name + " = " + value);
-                                } else {
-                                    sb.append("Failed: " + arGet.cause());
-                                }
-                                System.out.println("responding to http request now");
-                                ctx.response().end(sb.toString());
-                            }); // get
-                        } // if name != null
-                    } // if size > 0
-                }); // size
-            });  // sharedData().getClusterWideMap
-        });
+        Router router = Router.router(vertx);
+        router.get("/").handler(ctx -> ctx.response().end(String.format("Clustered? %s at %s", vertx.isClustered() ? "Yes" : "No", now())));
+        router.get("/api/addstuff").handler(this::addStuff);
+        router.get("/api/getstuff").handler(this::getStuff);
 
         vertx.createHttpServer().requestHandler(router::accept).listen(8080);
+    }
+
+    private void addStuff(RoutingContext ctx) {
+        String name = ctx.request().getParam("name");
+        if (name == null) {
+            ctx.response().end("You must provide a name parameter.");
+            return;
+        }
+
+        vertx.sharedData().getClusterWideMap(CLUSTER_MAP_KEY, mapEvent -> {
+            AsyncMap<Object, Object> result = mapEvent.result();
+            result.get(NAMES_KEY, event -> {
+                if (event.succeeded()) {
+                    Set<String> names = (Set<String>) event.result();
+                    result.replace(NAMES_KEY, ImmutableSortedSet.naturalOrder().addAll(names).add(name).build(), putEvent -> {
+                        if (putEvent.succeeded()) {
+                            ctx.response().end(String.format("Name '%s' added successfully.", name));
+                        } else {
+                            ctx.response().end(String.format("Error adding name: '%s'", putEvent.cause()));
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    private void getStuff(RoutingContext ctx) {
+        vertx.sharedData().getClusterWideMap(CLUSTER_MAP_KEY, mapEvent -> {
+            AsyncMap<Object, Object> result = mapEvent.result();
+            result.get(NAMES_KEY, event -> {
+                if (event.succeeded()) {
+                    Set<String> names = (Set<String>) event.result();
+                    ctx.response().end(Json.encodePrettily(names));
+                } else {
+                    ctx.response().end(String.format("Error getting names: '%s'", event.cause()));
+                }
+            });
+        });
     }
 }
