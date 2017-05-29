@@ -24,6 +24,8 @@ public class MainClusterMap extends AbstractVerticle {
 
     private static final String NAMES_KEY = "names_";
 
+    private static final int PORT = Integer.parseInt(System.getProperty("http.port", "8080"));
+
     public static void main(String[] args) {
         Config config = new XmlConfigBuilder(MainClusterMap.class.getResourceAsStream("/cluster.xml")).build();
         VertxOptions vertxOptions = new VertxOptions()
@@ -48,7 +50,7 @@ public class MainClusterMap extends AbstractVerticle {
     public void start() {
         vertx.sharedData().getClusterWideMap(CLUSTER_MAP_KEY, mapEvent -> {
             AsyncMap<Object, Object> result = mapEvent.result();
-            result.put(NAMES_KEY, ImmutableSet.of(), event -> {
+            result.putIfAbsent(NAMES_KEY, ImmutableSet.of(), event -> {
             });
         });
 
@@ -57,7 +59,7 @@ public class MainClusterMap extends AbstractVerticle {
         router.get("/api/addstuff").handler(this::addStuff);
         router.get("/api/getstuff").handler(this::getStuff);
 
-        vertx.createHttpServer().requestHandler(router::accept).listen(8080);
+        vertx.createHttpServer().requestHandler(router::accept).listen(PORT);
     }
 
     private void addStuff(RoutingContext ctx) {
