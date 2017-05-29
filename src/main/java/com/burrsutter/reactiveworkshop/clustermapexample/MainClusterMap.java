@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableSortedSet;
 import com.hazelcast.config.Config;
 import com.hazelcast.config.XmlConfigBuilder;
 import io.vertx.core.AbstractVerticle;
+import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.json.Json;
@@ -66,34 +67,46 @@ public class MainClusterMap extends AbstractVerticle {
             return;
         }
 
-        vertx.sharedData().getClusterWideMap(CLUSTER_MAP_KEY, mapEvent -> {
-            AsyncMap<Object, Object> result = mapEvent.result();
-            result.get(NAMES_KEY, event -> {
-                if (event.succeeded()) {
-                    Set<String> names = (Set<String>) event.result();
-                    result.replace(NAMES_KEY, ImmutableSortedSet.naturalOrder().addAll(names).add(name).build(), putEvent -> {
-                        if (putEvent.succeeded()) {
-                            ctx.response().end(String.format("Name '%s' added successfully.", name));
-                        } else {
-                            ctx.response().end(String.format("Error adding name: '%s'", putEvent.cause()));
-                        }
-                    });
-                }
-            });
-        });
+        readNames().compose(strings -> {
+            readClusterMap().compose(asyncMap -> {
+                asyncMap.replace(NAMES_KEY, ImmutableSortedSet.naturalOrder().addAll(strings).add(name).build(), putEvent -> {
+                    if (putEvent.succeeded()) {
+                        ctx.response().end(String.format("Name '%s' added successfully.", name));
+                    } else {
+                        ctx.response().end(String.format("Error adding name: '%s'", putEvent.cause()));
+                    }
+                });
+            }, Future.future().setHandler(handler -> {
+                ctx.response().end(String.format("Error adding name: '%s'", handler.cause()));
+            }));
+        }, Future.failedFuture("Error reading names"));
     }
 
     private void getStuff(RoutingContext ctx) {
-        vertx.sharedData().getClusterWideMap(CLUSTER_MAP_KEY, mapEvent -> {
-            AsyncMap<Object, Object> result = mapEvent.result();
-            result.get(NAMES_KEY, event -> {
-                if (event.succeeded()) {
-                    Set<String> names = (Set<String>) event.result();
-                    ctx.response().end(Json.encodePrettily(names));
+        readNames().compose(strings -> {
+            ctx.response().end(Json.encodePrettily(strings));
+        }, Future.failedFuture("Error reading names"));
+    }
+
+    private Future<AsyncMap<Object, Object>> readClusterMap() {
+        Future<AsyncMap<Object, Object>> future = Future.future();
+        vertx.sharedData().getClusterWideMap(CLUSTER_MAP_KEY, future.completer());
+        return future;
+    }
+
+    private Future<Set<String>> readNames() {
+        Future<Set<String>> future = Future.future();
+        vertx.sharedData().getClusterWideMap(CLUSTER_MAP_KEY, event -> {
+            AsyncMap<Object, Object> result = event.result();
+            result.get(NAMES_KEY, namesEvent -> {
+                if (namesEvent.succeeded()) {
+                    Set<String> names = (Set<String>) namesEvent.result();
+                    future.complete(names);
                 } else {
-                    ctx.response().end(String.format("Error getting names: '%s'", event.cause()));
+                    future.fail(namesEvent.cause());
                 }
             });
         });
+        return future;
     }
 }
