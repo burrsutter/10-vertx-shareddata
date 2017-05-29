@@ -12,7 +12,7 @@
         <!--
         <vertx.verticle>com.burrsutter.reactiveworkshop.localmapexample.MainLocalMap</vertx.verticle>
         -->
-        <vertx.verticle>com.burrsutter.reactiveworkshop.clustermapexample.MainVerticle</vertx.verticle>
+        <vertx.launcher>com.burrsutter.reactiveworkshop.clustermapexample.MainClusterMap</vertx.launcher>
         <fabric8-vertx-maven-plugin.version>1.0.5</fabric8-vertx-maven-plugin.version>
         <maven.compiler.source>1.8</maven.compiler.source>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
